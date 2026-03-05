@@ -55,6 +55,12 @@ RUN mkdir -p /etc/containers && \
 COPY --from=fex-builder /src/FEX/build/Bin/FEXInterpreter /usr/bin/FEXInterpreter
 COPY --from=fex-builder /src/FEX/build/Bin/FEXServer /usr/bin/FEXServer
 
+# Configure FEX: disable FEXServer (not available in binfmt containers)
+# and set RootFS path
+RUN mkdir -p /root/.fex-emu && \
+    echo '{"Config":{"RootFS":"/usr/share/fex-emu/RootFS/","ServerMode":"0"}}' \
+    > /root/.fex-emu/Config.json
+
 # Copy test scripts
 COPY scripts/ /scripts/
 
