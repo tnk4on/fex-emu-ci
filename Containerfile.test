@@ -39,9 +39,17 @@ FROM fedora:43
 RUN dnf install -y --setopt=install_weak_deps=false \
     fex-emu-rootfs-fedora \
     podman \
+    fuse-overlayfs \
     file \
     procps-ng \
     && dnf clean all
+
+# Configure Podman for nested container operation
+RUN mkdir -p /etc/containers && \
+    echo '[storage]' > /etc/containers/storage.conf && \
+    echo 'driver = "overlay"' >> /etc/containers/storage.conf && \
+    echo '[storage.options.overlay]' >> /etc/containers/storage.conf && \
+    echo 'mount_program = "/usr/bin/fuse-overlayfs"' >> /etc/containers/storage.conf
 
 # Copy static-pie FEXInterpreter/FEXServer from builder
 COPY --from=fex-builder /src/FEX/build/Bin/FEXInterpreter /usr/bin/FEXInterpreter
