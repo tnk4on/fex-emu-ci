@@ -160,12 +160,34 @@ if [ -f /proc/sys/fs/binfmt_misc/FEX-x86_64 ]; then
     fi
 fi
 
-# 2-4: Podman x86_64 container
+# 2-4: Start FEXServer for container emulation
+echo ""
+echo "[Setup] Starting FEXServer..."
+FEXServer --foreground &
+FEXSERVER_PID=$!
+sleep 1
+# Find the FEXServer socket
+FEX_SOCKET=""
+for sock in /tmp/*.FEXServer.Socket; do
+    if [ -S "$sock" ]; then FEX_SOCKET="$sock"; break; fi
+done
+if [ -n "$FEX_SOCKET" ]; then
+    report PASS "FEXServer running (PID=$FEXSERVER_PID, socket=$FEX_SOCKET)"
+else
+    report FAIL "FEXServer socket not found"
+fi
+
+# 2-5: Podman x86_64 container
 export CONTAINERS_STORAGE_DRIVER=overlay
 echo ""
 echo "[Test] x86_64 container (--platform linux/amd64)..."
 TMPOUT=$(mktemp); TMPERR=$(mktemp)
-timeout 120 podman run --rm --platform linux/amd64 \
+SOCKET_MOUNT=""
+if [ -n "$FEX_SOCKET" ]; then
+    # Mount FEXServer socket into container at /tmp/0.FEXServer.Socket
+    SOCKET_MOUNT="-v ${FEX_SOCKET}:/tmp/0.FEXServer.Socket"
+fi
+timeout 120 podman run --rm --platform linux/amd64 $SOCKET_MOUNT \
     docker.io/library/alpine:latest uname -m >"$TMPOUT" 2>"$TMPERR" || true
 RESULT=$(tail -1 "$TMPOUT")
 if [ -n "$(cat $TMPERR)" ]; then
@@ -189,11 +211,11 @@ else
     report FAIL "ARM64 regression" "got: $ARM_RESULT"
 fi
 
-# 2-6: Stability (3 runs)
+# 2-7: Stability (3 runs)
 echo "[Test] Stability (3 sequential x86_64 runs)..."
 OK_COUNT=0
 for i in $(seq 1 3); do
-    R=$(timeout 60 podman run --rm --platform linux/amd64 \
+    R=$(timeout 60 podman run --rm --platform linux/amd64 $SOCKET_MOUNT \
         docker.io/library/alpine:latest uname -m 2>/dev/null | tail -1 || echo "ERROR")
     if [ "$R" = "x86_64" ]; then OK_COUNT=$((OK_COUNT + 1)); fi
 done
@@ -201,6 +223,11 @@ if [ $OK_COUNT -eq 3 ]; then
     report PASS "Stability: $OK_COUNT/3 x86_64 runs succeeded"
 else
     report FAIL "Stability" "$OK_COUNT/3 runs succeeded"
+fi
+
+# Cleanup FEXServer
+if [ -n "${FEXSERVER_PID:-}" ]; then
+    kill $FEXSERVER_PID 2>/dev/null || true
 fi
 
 # =============================================================================
