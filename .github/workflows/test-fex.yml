@@ -164,9 +164,16 @@ jobs:
 
       - name: Copy test files to EC2
         run: |
-          scp ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key -r \
-            Containerfile.test scripts/ \
-            fedora@${{ env.VM_IP }}:~/
+          for i in $(seq 1 5); do
+            if scp ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key -r \
+              Containerfile.test scripts/ \
+              fedora@${{ env.VM_IP }}:~/ 2>/dev/null; then
+              echo "Files copied successfully (attempt $i)"
+              break
+            fi
+            echo "  scp attempt $i/5 failed, retrying..."
+            sleep 10
+          done
 
       - name: Build static-pie FEXInterpreter
         run: |
