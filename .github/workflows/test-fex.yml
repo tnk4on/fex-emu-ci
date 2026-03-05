@@ -1,0 +1,219 @@
+name: FEX-Emu Test (AWS EC2 Graviton)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      instance_type:
+        description: 'EC2 Instance Type'
+        required: false
+        default: 't4g.small'
+        type: choice
+        options:
+          - t4g.micro
+          - t4g.small
+          - t4g.medium
+          - c7g.medium
+      region:
+        description: 'AWS Region'
+        required: false
+        default: 'us-east-1'
+        type: choice
+        options:
+          - us-east-1
+          - us-west-2
+          - ap-northeast-1
+
+env:
+  AWS_REGION: ${{ github.event.inputs.region || 'us-east-1' }}
+  KEY_NAME: fex-ci-key-${{ github.run_id }}
+  SECURITY_GROUP_NAME: fex-ci-sg-${{ github.run_id }}
+  SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o ConnectTimeout=10"
+
+permissions:
+  contents: read
+
+jobs:
+  fex-test:
+    name: FEX-Emu (Graviton aarch64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/ec2_key -N '' -C 'fex-emu-ci'
+          chmod 600 ~/.ssh/ec2_key
+
+      - name: Import SSH key to AWS
+        run: |
+          aws ec2 import-key-pair \
+            --key-name "${{ env.KEY_NAME }}" \
+            --public-key-material "fileb://$HOME/.ssh/ec2_key.pub" \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Create security group
+        run: |
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "${{ env.SECURITY_GROUP_NAME }}" \
+            --description "FEX-Emu CI test runner" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'GroupId' --output text)
+          echo "SECURITY_GROUP_ID=$SG_ID" >> $GITHUB_ENV
+
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp \
+            --port 22 \
+            --cidr 0.0.0.0/0 \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Find Fedora aarch64 AMI
+        run: |
+          echo "Searching for Fedora 43 aarch64 AMI..."
+          AMI_ID=$(aws ec2 describe-images \
+            --owners 125523088429 \
+            --filters \
+              "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.aarch64-43*" \
+              "Name=virtualization-type,Values=hvm" \
+              "Name=architecture,Values=arm64" \
+              "Name=state,Values=available" \
+            --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+            echo "Fedora 43 not found, trying Fedora 42..."
+            AMI_ID=$(aws ec2 describe-images \
+              --owners 125523088429 \
+              --filters \
+                "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.aarch64-42*" \
+                "Name=virtualization-type,Values=hvm" \
+                "Name=architecture,Values=arm64" \
+                "Name=state,Values=available" \
+              --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+              --output text \
+              --region ${{ env.AWS_REGION }})
+          fi
+
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+            echo "::error::Could not find Fedora aarch64 AMI"
+            exit 1
+          fi
+
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_ENV
+          AMI_NAME=$(aws ec2 describe-images --image-ids "$AMI_ID" \
+            --query 'Images[0].Name' --output text --region ${{ env.AWS_REGION }})
+          echo "Found AMI: $AMI_ID ($AMI_NAME)"
+
+      - name: Launch EC2 Graviton instance
+        run: |
+          INSTANCE_TYPE="${{ github.event.inputs.instance_type || 't4g.small' }}"
+          echo "Launching $INSTANCE_TYPE..."
+
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ env.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "${{ env.KEY_NAME }}" \
+            --security-group-ids "${{ env.SECURITY_GROUP_ID }}" \
+            --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=30,VolumeType=gp3}' \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=fex-ci-${{ github.run_id }}}]" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Instances[0].InstanceId' --output text)
+
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "Waiting for instance $INSTANCE_ID..."
+
+          aws ec2 wait instance-running \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.AWS_REGION }}
+
+          VM_IP=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+
+          echo "VM_IP=$VM_IP" >> $GITHUB_ENV
+          echo "Instance running at: $VM_IP"
+
+      - name: Wait for SSH
+        run: |
+          echo "Waiting for SSH connectivity..."
+          for i in $(seq 1 30); do
+            if ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} 'echo ok' 2>/dev/null; then
+              echo "SSH connected after $i attempts"
+              break
+            fi
+            echo "  Attempt $i/30 - waiting..."
+            sleep 10
+          done
+
+      - name: Copy test files to EC2
+        run: |
+          scp ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key -r \
+            Containerfile.test scripts/ \
+            fedora@${{ env.VM_IP }}:~/
+
+      - name: Build static-pie FEXInterpreter
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -ex
+            echo "=== Installing Podman ==="
+            sudo dnf install -y podman
+            echo "=== Building FEX test image ==="
+            sudo podman build -t fex-test -f ~/Containerfile.test ~/
+          '
+
+      - name: Run FEX-Emu tests
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            echo "=== Running Tier 1 + Tier 2 tests ==="
+            sudo podman run --rm --privileged fex-test
+          '
+
+      # === Cleanup (always runs) ===
+      - name: Terminate EC2 instance
+        if: always()
+        run: |
+          if [ -n "${{ env.INSTANCE_ID }}" ]; then
+            echo "Terminating instance ${{ env.INSTANCE_ID }}..."
+            aws ec2 terminate-instances \
+              --instance-ids "${{ env.INSTANCE_ID }}" \
+              --region ${{ env.AWS_REGION }} || true
+            aws ec2 wait instance-terminated \
+              --instance-ids "${{ env.INSTANCE_ID }}" \
+              --region ${{ env.AWS_REGION }} || true
+            echo "Instance terminated"
+          fi
+
+      - name: Delete security group
+        if: always()
+        run: |
+          if [ -n "${{ env.SECURITY_GROUP_ID }}" ]; then
+            sleep 5
+            aws ec2 delete-security-group \
+              --group-id "${{ env.SECURITY_GROUP_ID }}" \
+              --region ${{ env.AWS_REGION }} || true
+          fi
+
+      - name: Delete SSH key pair
+        if: always()
+        run: |
+          aws ec2 delete-key-pair \
+            --key-name "${{ env.KEY_NAME }}" \
+            --region ${{ env.AWS_REGION }} || true

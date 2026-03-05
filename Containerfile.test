@@ -1,0 +1,53 @@
+# =============================================================================
+# Containerfile.test — FEX-Emu CI テスト環境
+# =============================================================================
+# Containerfile.COREOS と同一のビルドプロセスで static-pie FEXInterpreter をビルドし、
+# Tier 1 + Tier 2 テストを実行する。
+#
+# 使い方:
+#   podman build -t fex-test -f Containerfile.test .
+#   podman run --rm --privileged fex-test
+
+# ===== Stage 1: Build FEXInterpreter + FEXServer (static-pie) =====
+# ※ Containerfile.COREOS と完全に同一のビルド設定
+FROM fedora:43 AS fex-builder
+
+RUN dnf install -y --setopt=install_weak_deps=false \
+    clang lld llvm cmake ninja-build git \
+    glibc-static libstdc++-static python3 python3-setuptools \
+    && dnf clean all
+
+ARG FEX_VERSION=FEX-2509.1
+RUN git clone --depth 1 --branch ${FEX_VERSION} \
+    https://github.com/FEX-Emu/FEX.git /src/FEX \
+    && cd /src/FEX && git submodule update --init --depth 1
+
+RUN cd /src/FEX && cmake -B build -G Ninja \
+    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+    -DCMAKE_AR=/usr/bin/llvm-ar -DCMAKE_RANLIB=/usr/bin/llvm-ranlib \
+    -DCMAKE_C_COMPILER_AR=/usr/bin/llvm-ar -DCMAKE_CXX_COMPILER_AR=/usr/bin/llvm-ar \
+    -DBUILD_SHARED_LIBS=OFF -DBUILD_THUNKS=OFF -DBUILD_TESTS=OFF \
+    -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF \
+    -DENABLE_JEMALLOC=ON -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF \
+    -DCMAKE_EXE_LINKER_FLAGS=-static-pie \
+    && ninja -C build -j$(nproc) FEXInterpreter FEXServer
+
+# ===== Stage 2: Test environment =====
+FROM fedora:43
+
+# Install FEX RootFS + Podman + tools
+RUN dnf install -y --setopt=install_weak_deps=false \
+    fex-emu-rootfs-fedora \
+    podman \
+    file \
+    procps-ng \
+    && dnf clean all
+
+# Copy static-pie FEXInterpreter/FEXServer from builder
+COPY --from=fex-builder /src/FEX/build/Bin/FEXInterpreter /usr/bin/FEXInterpreter
+COPY --from=fex-builder /src/FEX/build/Bin/FEXServer /usr/bin/FEXServer
+
+# Copy test scripts
+COPY scripts/ /scripts/
+
+CMD ["bash", "/scripts/test-fex-all.sh"]
