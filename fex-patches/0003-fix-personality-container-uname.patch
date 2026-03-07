@@ -1,0 +1,21 @@
+diff --git a/Source/Tools/FEXInterpreter/ELFCodeLoader.h b/Source/Tools/FEXInterpreter/ELFCodeLoader.h
+index 4deea3e94..2e1e7f39b 100644
+--- a/Source/Tools/FEXInterpreter/ELFCodeLoader.h
++++ b/Source/Tools/FEXInterpreter/ELFCodeLoader.h
+@@ -412,10 +412,14 @@ public:
+     // Set the process personality here
+     // Also, what about ADDR_LIMIT_3GB & co ?
+     uint32_t Personality = personality(~0ULL);
++    // personality(~0ULL) queries the current personality but can return -1 (0xffffffff)
++    // inside user namespaces/containers on aarch64. In that case, default to PER_LINUX (0).
++    if (Personality == (uint32_t)-1) {
++      Personality = 0;
++    }
+     Personality |= ExecuteAll ? READ_IMPLIES_EXEC : 0;
+     if (-1 == personality(Personality)) {
+-      LogMan::Msg::EFmt("Setting personality failed");
+-      return false;
++      // Personality setting can fail in containers/user namespaces, ignore the error.
+     }
+ 
+     if (Thread) {

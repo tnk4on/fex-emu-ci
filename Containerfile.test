@@ -9,18 +9,21 @@
 #   podman run --rm --privileged fex-test
 
 # ===== Stage 1: Build FEXInterpreter + FEXServer (static-pie) =====
-# ※ Containerfile.COREOS と完全に同一のビルド設定
+# ※ Containerfile.COREOS と同一のビルド設定
 FROM fedora:43 AS fex-builder
 
 RUN dnf install -y --setopt=install_weak_deps=false \
     clang lld llvm cmake ninja-build git \
-    glibc-static libstdc++-static python3 python3-setuptools \
+    glibc-static libstdc++-static python3 python3-setuptools nasm \
     && dnf clean all
 
-ARG FEX_VERSION=FEX-2509.1
+ARG FEX_VERSION=FEX-2603
 RUN git clone --depth 1 --branch ${FEX_VERSION} \
     https://github.com/FEX-Emu/FEX.git /src/FEX \
     && cd /src/FEX && git submodule update --init --depth 1
+
+COPY fex-patches/ /src/patches/
+RUN cd /src/FEX && git apply /src/patches/*.patch
 
 RUN cd /src/FEX && cmake -B build -G Ninja \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
@@ -30,7 +33,7 @@ RUN cd /src/FEX && cmake -B build -G Ninja \
     -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF \
     -DENABLE_JEMALLOC=ON -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF \
     -DCMAKE_EXE_LINKER_FLAGS=-static-pie \
-    && ninja -C build -j$(nproc) FEXInterpreter FEXServer
+    && ninja -C build -j$(nproc) FEX FEXServer FEXOfflineCompiler
 
 # ===== Stage 2: Test environment =====
 FROM fedora:43
@@ -52,14 +55,9 @@ RUN mkdir -p /etc/containers && \
     echo 'mount_program = "/usr/bin/fuse-overlayfs"' >> /etc/containers/storage.conf
 
 # Copy static-pie FEXInterpreter/FEXServer from builder
-COPY --from=fex-builder /src/FEX/build/Bin/FEXInterpreter /usr/bin/FEXInterpreter
+# Note: FEX-2603 renamed FEXInterpreter binary to "FEX"
+COPY --from=fex-builder /src/FEX/build/Bin/FEX /usr/bin/FEXInterpreter
 COPY --from=fex-builder /src/FEX/build/Bin/FEXServer /usr/bin/FEXServer
-
-# Configure FEX: disable FEXServer (not available in binfmt containers)
-# and set RootFS path
-RUN mkdir -p /root/.fex-emu && \
-    echo '{"Config":{"RootFS":"/usr/share/fex-emu/RootFS/","ServerMode":"0"}}' \
-    > /root/.fex-emu/Config.json
 
 # Copy test scripts
 COPY scripts/ /scripts/

@@ -1,0 +1,13 @@
+diff --git a/Source/Tools/FEXServer/ProcessPipe.cpp b/Source/Tools/FEXServer/ProcessPipe.cpp
+index a874cd6..41d3166 100644
+--- a/Source/Tools/FEXServer/ProcessPipe.cpp
++++ b/Source/Tools/FEXServer/ProcessPipe.cpp
+@@ -475,7 +475,7 @@ static int RunOfflineCompiler(const char* CodeMap) {
+ };
+ 
+ void HandleSocketData(fasio::tcp_socket& Socket) {
+-  std::vector<uint8_t> Data(1500);
++  std::vector<uint8_t> Data(8192);
+ 
+   // Get the current number of FDs of the process before we start handling sockets.
+   GetMaxFDs();
