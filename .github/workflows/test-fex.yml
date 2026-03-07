@@ -119,10 +119,10 @@ jobs:
             --query 'Images[0].Name' --output text --region ${{ env.AWS_REGION }})
           echo "Found AMI: $AMI_ID ($AMI_NAME)"
 
-      - name: Launch EC2 Graviton instance
+      - name: Launch EC2 Graviton spot instance
         run: |
           INSTANCE_TYPE="${{ github.event.inputs.instance_type || 't4g.small' }}"
-          echo "Launching $INSTANCE_TYPE..."
+          echo "Launching $INSTANCE_TYPE (spot)..."
 
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id "${{ env.AMI_ID }}" \
@@ -130,6 +130,7 @@ jobs:
             --key-name "${{ env.KEY_NAME }}" \
             --security-group-ids "${{ env.SECURITY_GROUP_ID }}" \
             --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=30,VolumeType=gp3}' \
+            --instance-market-options 'MarketType=spot,SpotOptions={SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}' \
             --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=fex-ci-${{ github.run_id }}}]" \
             --region ${{ env.AWS_REGION }} \
             --query 'Instances[0].InstanceId' --output text)
@@ -148,7 +149,7 @@ jobs:
             --region ${{ env.AWS_REGION }})
 
           echo "VM_IP=$VM_IP" >> $GITHUB_ENV
-          echo "Instance running at: $VM_IP"
+          echo "Spot instance running at: $VM_IP"
 
       - name: Wait for SSH
         run: |
@@ -185,11 +186,11 @@ jobs:
             sudo podman build -t fex-test -f ~/Containerfile.test ~/
           '
 
-      - name: Run FEX-Emu tests
+      - name: Run FEX-Emu strict tests
         run: |
           ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
             set -e
-            echo "=== Running Tier 1 + Tier 2 tests ==="
+            echo "=== Running FEX-Emu strict tests ==="
             sudo podman run --rm --privileged fex-test
           '
 

@@ -1,10 +1,11 @@
 #!/bin/bash
-# test-fex-all.sh — Tier 1 + Tier 2 FEX-Emu 統合テスト
+# test-fex-all.sh — FEX-Emu 厳格テスト (test-fex.md ベース)
 #
 # static-pie FEXInterpreter がインストール済みの特権コンテナ内で実行する。
-#
-# Tier 1: FEX-Emu インストール検証 + 直接 x86_64 実行
-# Tier 2: binfmt_misc 登録 + Podman x86_64 コンテナテスト
+# 偽陽性防止ルール:
+#   - uname -m だけで判定しない → binfmt handler の interpreter を確認
+#   - FEXInterpreter は static-pie であること → file で確認
+#   - ARM64 回帰テストは --platform linux/arm64 必須
 
 set -uo pipefail
 
@@ -28,11 +29,10 @@ header() {
 }
 
 # =============================================================================
-# Tier 1: FEX-Emu インストール検証
+# [1] Host architecture
 # =============================================================================
-header "Tier 1: FEX-Emu Installation Verification"
+header "[1] Host Architecture"
 
-# 1-1: Host architecture
 ARCH=$(uname -m)
 if [ "$ARCH" = "aarch64" ]; then
     report PASS "Host architecture: $ARCH"
@@ -40,25 +40,16 @@ else
     report FAIL "Host architecture" "Expected aarch64, got $ARCH"
 fi
 
-# 1-2: OS
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    report PASS "OS: $PRETTY_NAME"
-else
-    report FAIL "Cannot identify OS"
-fi
+# =============================================================================
+# [2] FEXInterpreter must be static-pie (偽陽性防止: static 非PIE はアドレス衝突で不安定)
+# =============================================================================
+header "[2] FEXInterpreter (must be static-pie)"
 
-# 1-3: FEXInterpreter binary
 FEX_PATH=$(command -v FEXInterpreter 2>/dev/null || echo "")
 if [ -n "$FEX_PATH" ]; then
     report PASS "FEXInterpreter found: $FEX_PATH"
-else
-    report FAIL "FEXInterpreter not found"
-fi
-
-# 1-4: FEXInterpreter static-pie check
-if [ -n "$FEX_PATH" ]; then
     FILE_INFO=$(file "$FEX_PATH")
+    echo "  $FILE_INFO"
     if echo "$FILE_INFO" | grep -q "static-pie"; then
         report PASS "FEXInterpreter is static-pie"
     elif echo "$FILE_INFO" | grep -q "statically linked"; then
@@ -66,71 +57,53 @@ if [ -n "$FEX_PATH" ]; then
     else
         report FAIL "FEXInterpreter is NOT static-pie" "$FILE_INFO"
     fi
+else
+    report FAIL "FEXInterpreter not found"
 fi
 
-# 1-5: FEX RootFS
+# =============================================================================
+# [3] FEX RootFS extracted
+# =============================================================================
+header "[3] FEX RootFS"
+
 ROOTFS_DIR=""
 for dir in /usr/share/fex-emu/RootFS /var/lib/fex-emu-rootfs; do
-    if [ -d "$dir" ] && [ "$(ls -A "$dir" 2>/dev/null)" ]; then
+    if [ -d "$dir/usr" ]; then
         ROOTFS_DIR="$dir"
         SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
-        report PASS "RootFS: $dir ($SIZE)"
+        report PASS "RootFS extracted: $dir ($SIZE)"
         break
     fi
 done
 if [ -z "$ROOTFS_DIR" ]; then
-    report FAIL "FEX RootFS not found"
-fi
-
-# 1-6: x86_64 直接実行
-if [ -n "$FEX_PATH" ]; then
-    X86_BINS=(
-        "/usr/share/fex-emu/RootFS/usr/bin/uname"
-        "/var/lib/fex-emu-rootfs/usr/bin/uname"
-    )
-    X86_BIN=""
-    for bin in "${X86_BINS[@]}"; do
-        if [ -x "$bin" ]; then X86_BIN="$bin"; break; fi
-    done
-
-    if [ -n "$X86_BIN" ]; then
-        RESULT=$("$FEX_PATH" "$X86_BIN" -m 2>&1 || echo "ERROR")
-        if [ "$RESULT" = "x86_64" ]; then
-            report PASS "Direct x86_64 execution: uname -m = $RESULT"
-        else
-            report FAIL "Direct x86_64 execution" "got: $RESULT"
-        fi
-    else
-        report SKIP "Direct x86_64 execution" "No x86_64 uname binary found"
-    fi
-else
-    report SKIP "Direct x86_64 execution" "FEXInterpreter not available"
+    report FAIL "FEX RootFS not found or not extracted"
 fi
 
 # =============================================================================
-# Tier 2: binfmt_misc + Podman コンテナテスト
+# [4] binfmt_misc FEX-x86_64 handler (flags=POCF required)
 # =============================================================================
-header "Tier 2: binfmt_misc + Podman Container Tests"
+header "[4] binfmt FEX-x86_64 (flags=POCF required)"
 
-# 2-1: binfmt_misc mount
+# Mount binfmt_misc if needed
 if ! mount | grep -q binfmt_misc; then
     mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
 fi
+
 if mount | grep -q binfmt_misc; then
     report PASS "binfmt_misc mounted"
 else
     report FAIL "binfmt_misc mount failed (requires --privileged)"
+    # Can't continue without binfmt
     echo ""
     echo -e "  ${G}$PASS passed${N}  ${R}$FAIL failed${N}  ${Y}$SKIP skipped${N}"
     exit $FAIL
 fi
 
-# 2-2: FEX handler registration
+# Register handler if not present
 FEX_HANDLER_EXISTS=false
 for name in FEX-x86_64 fex-x86_64; do
     if [ -f "/proc/sys/fs/binfmt_misc/$name" ]; then
         FEX_HANDLER_EXISTS=true
-        report PASS "FEX binfmt handler already registered: $name"
         break
     fi
 done
@@ -143,30 +116,50 @@ if [ "$FEX_HANDLER_EXISTS" = "false" ]; then
         report FAIL "FEX-x86_64 handler registration failed"
 fi
 
-# 2-3: Handler verification
+# Verify handler details (偽陽性防止: handler の中身を厳密に検証)
 if [ -f /proc/sys/fs/binfmt_misc/FEX-x86_64 ]; then
-    STATUS=$(head -1 /proc/sys/fs/binfmt_misc/FEX-x86_64)
-    if echo "$STATUS" | grep -q "enabled"; then
+    HANDLER_INFO=$(cat /proc/sys/fs/binfmt_misc/FEX-x86_64)
+    echo "  Handler details:"
+    echo "$HANDLER_INFO" | sed 's/^/    /'
+
+    # Check enabled
+    if echo "$HANDLER_INFO" | head -1 | grep -q "enabled"; then
         report PASS "FEX-x86_64 handler enabled"
     else
-        report FAIL "FEX-x86_64 handler not enabled" "$STATUS"
+        report FAIL "FEX-x86_64 handler not enabled"
     fi
 
-    FLAGS=$(grep "flags:" /proc/sys/fs/binfmt_misc/FEX-x86_64 || echo "")
-    if echo "$FLAGS" | grep -q "F"; then
-        report PASS "binfmt F flag set (fix-binary)"
+    # Check interpreter is FEXInterpreter (偽陽性防止: QEMU ではないことを確認)
+    INTERP_LINE=$(echo "$HANDLER_INFO" | grep "interpreter")
+    if echo "$INTERP_LINE" | grep -q "FEXInterpreter"; then
+        report PASS "Interpreter is FEXInterpreter (not QEMU)"
     else
-        report SKIP "binfmt F flag" "Not set"
+        report FAIL "Interpreter is NOT FEXInterpreter" "$INTERP_LINE"
+    fi
+
+    # Check POCF flags
+    FLAGS_LINE=$(echo "$HANDLER_INFO" | grep "flags:")
+    MISSING_FLAGS=""
+    for flag in P O C F; do
+        if ! echo "$FLAGS_LINE" | grep -q "$flag"; then
+            MISSING_FLAGS="$MISSING_FLAGS $flag"
+        fi
+    done
+    if [ -z "$MISSING_FLAGS" ]; then
+        report PASS "binfmt flags: POCF (all required flags set)"
+    else
+        report FAIL "binfmt flags missing:$MISSING_FLAGS" "$FLAGS_LINE"
     fi
 fi
 
-# 2-4: Start FEXServer for container emulation
-echo ""
-echo "[Setup] Starting FEXServer..."
+# =============================================================================
+# [5] Start FEXServer for container emulation
+# =============================================================================
+header "[5] FEXServer"
+
 FEXServer --foreground &
 FEXSERVER_PID=$!
 sleep 1
-# Find the FEXServer socket
 FEX_SOCKET=""
 for sock in /tmp/*.FEXServer.Socket; do
     if [ -S "$sock" ]; then FEX_SOCKET="$sock"; break; fi
@@ -177,32 +170,44 @@ else
     report FAIL "FEXServer socket not found"
 fi
 
-# 2-5: Podman x86_64 container
-export CONTAINERS_STORAGE_DRIVER=overlay
-echo ""
-echo "[Test] x86_64 container (--platform linux/amd64)..."
-TMPOUT=$(mktemp); TMPERR=$(mktemp)
 SOCKET_MOUNT=""
 if [ -n "$FEX_SOCKET" ]; then
-    # Mount FEXServer socket into container at /tmp/0.FEXServer.Socket
     SOCKET_MOUNT="-v ${FEX_SOCKET}:/tmp/0.FEXServer.Socket"
 fi
-timeout 120 podman run --rm --platform linux/amd64 $SOCKET_MOUNT \
-    docker.io/library/alpine:latest uname -m >"$TMPOUT" 2>"$TMPERR" || true
-RESULT=$(tail -1 "$TMPOUT")
-if [ -n "$(cat $TMPERR)" ]; then
-    echo "  stderr (last 5):"
-    tail -5 "$TMPERR" | sed 's/^/    /'
-fi
-rm -f "$TMPOUT" "$TMPERR"
-if [ "$RESULT" = "x86_64" ]; then
-    report PASS "x86_64 container: uname -m = $RESULT"
+
+export CONTAINERS_STORAGE_DRIVER=overlay
+
+# =============================================================================
+# [6] x86_64 container (5x stability — 偽陽性防止: 安定性を厳格に検証)
+# =============================================================================
+header "[6] x86_64 Container (5x stability)"
+
+echo "[Test] 5 sequential x86_64 runs (all must return x86_64)..."
+OK_COUNT=0
+FAIL_OUTPUTS=""
+for i in $(seq 1 5); do
+    R=$(timeout 120 podman run --rm --platform linux/amd64 $SOCKET_MOUNT \
+        docker.io/library/alpine:latest uname -m 2>/dev/null | tail -1 || echo "ERROR")
+    if [ "$R" = "x86_64" ]; then
+        OK_COUNT=$((OK_COUNT + 1))
+        echo "  Run $i: $R ✓"
+    else
+        echo "  Run $i: $R ✗"
+        FAIL_OUTPUTS="$FAIL_OUTPUTS run$i='$R'"
+    fi
+done
+if [ $OK_COUNT -eq 5 ]; then
+    report PASS "x86_64 stability: $OK_COUNT/5 runs succeeded"
 else
-    report FAIL "x86_64 container" "stdout='$RESULT'"
+    report FAIL "x86_64 stability" "$OK_COUNT/5 succeeded,$FAIL_OUTPUTS"
 fi
 
-# 2-5: ARM64 regression
-echo "[Test] ARM64 regression (--platform linux/arm64)..."
+# =============================================================================
+# [7] ARM64 regression (--platform linux/arm64 必須 — 偽陽性防止)
+# =============================================================================
+header "[7] ARM64 Regression (--platform linux/arm64)"
+
+echo "[Test] ARM64 container must return aarch64..."
 ARM_RESULT=$(timeout 120 podman run --rm --platform linux/arm64 \
     docker.io/library/alpine:latest uname -m 2>/dev/null | tail -1 || echo "ERROR")
 if [ "$ARM_RESULT" = "aarch64" ]; then
@@ -211,23 +216,50 @@ else
     report FAIL "ARM64 regression" "got: $ARM_RESULT"
 fi
 
-# 2-7: Stability (3 runs)
-echo "[Test] Stability (3 sequential x86_64 runs)..."
-OK_COUNT=0
-for i in $(seq 1 3); do
-    R=$(timeout 60 podman run --rm --platform linux/amd64 $SOCKET_MOUNT \
-        docker.io/library/alpine:latest uname -m 2>/dev/null | tail -1 || echo "ERROR")
-    if [ "$R" = "x86_64" ]; then OK_COUNT=$((OK_COUNT + 1)); fi
+# =============================================================================
+# [8] Startup latency comparison (native arm64 vs FEX-Emu amd64)
+# =============================================================================
+header "[8] Startup Latency Comparison"
+
+echo "[Benchmark] native arm64 (3 runs):"
+ARM_TIMES=()
+for i in 1 2 3; do
+    T=$( { time podman run --rm --platform linux/arm64 $SOCKET_MOUNT \
+        docker.io/library/alpine:latest true 2>/dev/null; } 2>&1 | grep real | awk '{print $2}')
+    # Parse time format (e.g., 0m0.500s → seconds)
+    SECS=$(echo "$T" | sed 's/m/*60+/;s/s//' | bc 2>/dev/null || echo "0")
+    echo "  Run $i: ${T}"
+    ARM_TIMES+=("$SECS")
 done
-if [ $OK_COUNT -eq 3 ]; then
-    report PASS "Stability: $OK_COUNT/3 x86_64 runs succeeded"
-else
-    report FAIL "Stability" "$OK_COUNT/3 runs succeeded"
+
+echo "[Benchmark] FEX-Emu amd64 (3 runs):"
+FEX_TIMES=()
+for i in 1 2 3; do
+    T=$( { time podman run --rm --platform linux/amd64 $SOCKET_MOUNT \
+        docker.io/library/alpine:latest true 2>/dev/null; } 2>&1 | grep real | awk '{print $2}')
+    SECS=$(echo "$T" | sed 's/m/*60+/;s/s//' | bc 2>/dev/null || echo "0")
+    echo "  Run $i: ${T}"
+    FEX_TIMES+=("$SECS")
+done
+
+# Calculate averages if bc is available
+if command -v bc >/dev/null 2>&1 && [ ${#ARM_TIMES[@]} -eq 3 ] && [ ${#FEX_TIMES[@]} -eq 3 ]; then
+    ARM_AVG=$(echo "scale=3; (${ARM_TIMES[0]} + ${ARM_TIMES[1]} + ${ARM_TIMES[2]}) / 3" | bc 2>/dev/null || echo "N/A")
+    FEX_AVG=$(echo "scale=3; (${FEX_TIMES[0]} + ${FEX_TIMES[1]} + ${FEX_TIMES[2]}) / 3" | bc 2>/dev/null || echo "N/A")
+    echo ""
+    echo "  Native ARM64 avg: ${ARM_AVG}s"
+    echo "  FEX-Emu amd64 avg: ${FEX_AVG}s"
+    if [ "$ARM_AVG" != "N/A" ] && [ "$FEX_AVG" != "N/A" ]; then
+        OVERHEAD=$(echo "scale=3; $FEX_AVG - $ARM_AVG" | bc 2>/dev/null || echo "N/A")
+        echo "  FEX-Emu overhead: ${OVERHEAD}s"
+    fi
 fi
+report PASS "Latency benchmark completed"
 
 # Cleanup FEXServer
 if [ -n "${FEXSERVER_PID:-}" ]; then
     kill $FEXSERVER_PID 2>/dev/null || true
+    wait $FEXSERVER_PID 2>/dev/null || true
 fi
 
 # =============================================================================
@@ -240,7 +272,7 @@ echo -e "  ${G}$PASS passed${N}  ${R}$FAIL failed${N}  ${Y}$SKIP skipped${N}"
 echo ""
 
 if [ $FAIL -eq 0 ]; then
-    echo -e "${G}✅ All FEX-Emu tests passed${N}"
+    echo -e "${G}✅ All FEX-Emu strict tests passed${N}"
 else
     echo -e "${R}❌ Some tests failed${N}"
 fi
