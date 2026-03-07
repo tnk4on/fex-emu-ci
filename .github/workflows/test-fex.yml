@@ -166,7 +166,7 @@ jobs:
         run: |
           for i in $(seq 1 5); do
             if scp ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key -r \
-              Containerfile.test scripts/ \
+              Containerfile.test scripts/ fex-patches/ \
               fedora@${{ env.VM_IP }}:~/ 2>/dev/null; then
               echo "Files copied successfully (attempt $i)"
               break
