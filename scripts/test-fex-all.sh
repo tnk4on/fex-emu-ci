@@ -68,10 +68,15 @@ header "[3] FEX RootFS"
 
 ROOTFS_DIR=""
 for dir in /usr/share/fex-emu/RootFS /var/lib/fex-emu-rootfs; do
-    if [ -d "$dir/usr" ]; then
+    if [ -d "$dir" ] && [ "$(ls -A "$dir" 2>/dev/null)" ]; then
         ROOTFS_DIR="$dir"
         SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
-        report PASS "RootFS extracted: $dir ($SIZE)"
+        # Check if it has /usr (EROFS) or is RPM-installed flat layout
+        if [ -d "$dir/usr" ]; then
+            report PASS "RootFS extracted: $dir ($SIZE) [has /usr]"
+        else
+            report PASS "RootFS available: $dir ($SIZE) [RPM layout]"
+        fi
         break
     fi
 done
