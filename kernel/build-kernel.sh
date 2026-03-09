@@ -74,6 +74,15 @@ ApplyOptionalPatch 0005-KVM-arm64-Expose-TSO-capability-to-guests-and-contex.pat
 echo "Spec patched. Verifying:"
 grep -n 'Patch900\|0001-prctl\|0005-KVM' "${SPEC}"
 
+# 7. Add TSO Kconfig options to all aarch64 config files
+# Fedora's %prep validates that all new Kconfig options are explicitly set
+echo "=== Setting TSO Kconfig options in config files ==="
+for cfg in ~/rpmbuild/SOURCES/kernel-aarch64*.config; do
+    echo "  Updating: $(basename $cfg)"
+    echo "CONFIG_ARM64_MEMORY_MODEL_CONTROL=y" >> "$cfg"
+    echo "CONFIG_ARM64_ACTLR_STATE=y" >> "$cfg"
+done
+
 # 7. Build kernel RPMs
 echo "=== Building kernel RPMs ==="
 echo "Disk space before build:"
