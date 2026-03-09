@@ -56,6 +56,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          dnf install -y gh
           RELEASE_TAG="${{ inputs.release_tag || 'kernel-latest' }}"
           RPM_FILE=$(ls /tmp/kernel-rpms-*.tar.gz)
 
