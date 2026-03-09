@@ -54,27 +54,18 @@ scripts/config --enable CONFIG_KVM_ARM_HOST
 # 5. Update config with new options
 make olddefconfig
 
-# Force disable debuginfo AFTER olddefconfig (Kconfig deps prevent scripts/config from working)
-scripts/config --disable CONFIG_DEBUG_INFO
-scripts/config --enable CONFIG_DEBUG_INFO_NONE
-make olddefconfig
-
 # Verify TSO options
 echo "=== Verifying TSO config ==="
 grep -E 'ARM64_MEMORY_MODEL_CONTROL|ARM64_ACTLR_STATE' .config
-echo "--- Debug info config ---"
-grep -E 'CONFIG_DEBUG_INFO' .config
 
-# Skip debuginfo RPM generation
-echo '%debug_package %{nil}' > ~/.rpmmacros
-
-# 6. Build kernel RPM packages
+# 6. Build kernel RPM packages (binary only, no debuginfo/src)
 echo "=== Building kernel RPM packages ==="
 JOBS=$(nproc)
 echo "Building with ${JOBS} parallel jobs"
 echo "Disk space before build:"
 df -h /
-make -j${JOBS} rpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1
+# Use binrpm-pkg: builds binary RPMs only (no source RPM, no debuginfo)
+make -j${JOBS} binrpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1
 
 echo "Disk space after build:"
 df -h /
