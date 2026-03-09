@@ -17,7 +17,7 @@ echo "=== Installing build dependencies ==="
 dnf install -y --setopt=install_weak_deps=false \
     gcc make flex bison bc elfutils-libelf-devel \
     openssl openssl-devel perl dwarves \
-    rpm-build rsync kmod \
+    rpm-build rsync kmod hostname \
     && dnf clean all
 
 # 2. Clone kernel source (shallow)
