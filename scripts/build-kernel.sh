@@ -65,10 +65,10 @@ echo "Building with ${JOBS} parallel jobs"
 echo "Disk space before build:"
 df -h /
 
-# Suppress debuginfo RPM: patch mkspec to force with_debuginfo=0
-# mkspec checks CONFIG_DEBUG_INFO=y to decide debuginfo generation.
-# We force it off since debuginfo RPM processing stalls on large kernels.
-sed -i 's/^echo .%define with_debuginfo.*1.$/echo "%define with_debuginfo 0"/' scripts/package/mkspec
+# Suppress debuginfo RPM: replace debuginfo if-block in mkspec
+# mkspec has a block that sets with_debuginfo=1 based on CONFIG_DEBUG_INFO.
+# We replace the entire if-block with a forced with_debuginfo=0.
+sed -i '/# debuginfo package generation/,/^fi$/c\echo "%define with_debuginfo 0"' scripts/package/mkspec
 echo "Patched mkspec to disable debuginfo:"
 grep 'with_debuginfo' scripts/package/mkspec
 
