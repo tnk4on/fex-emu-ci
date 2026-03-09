@@ -65,12 +65,12 @@ echo "Building with ${JOBS} parallel jobs"
 echo "Disk space before build:"
 df -h /
 
-# Suppress debuginfo RPM generation system-wide
-# kernel Makefile's make binrpm-pkg calls rpmbuild internally
-# and does not pass RPMOPTS through, so we use system macros
-mkdir -p /etc/rpm
-echo '%debug_package %{nil}' > /etc/rpm/macros.nodebug
-echo '__os_install_post %{nil}' >> /etc/rpm/macros.nodebug
+# Suppress debuginfo RPM: patch mkspec to force with_debuginfo=0
+# mkspec checks CONFIG_DEBUG_INFO=y to decide debuginfo generation.
+# We force it off since debuginfo RPM processing stalls on large kernels.
+sed -i 's/^echo .%define with_debuginfo.*1.$/echo "%define with_debuginfo 0"/' scripts/package/mkspec
+echo "Patched mkspec to disable debuginfo:"
+grep 'with_debuginfo' scripts/package/mkspec
 
 make -j${JOBS} binrpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1
 
