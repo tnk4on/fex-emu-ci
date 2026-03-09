@@ -64,10 +64,15 @@ JOBS=$(nproc)
 echo "Building with ${JOBS} parallel jobs"
 echo "Disk space before build:"
 df -h /
-# Use binrpm-pkg: builds binary RPMs only (no source RPM)
-# RPMOPTS disables debuginfo RPM that stalls on large kernels
-make -j${JOBS} binrpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1 \
-    RPMOPTS="--define '%debug_package %{nil}'"
+
+# Suppress debuginfo RPM generation system-wide
+# kernel Makefile's make binrpm-pkg calls rpmbuild internally
+# and does not pass RPMOPTS through, so we use system macros
+mkdir -p /etc/rpm
+echo '%debug_package %{nil}' > /etc/rpm/macros.nodebug
+echo '__os_install_post %{nil}' >> /etc/rpm/macros.nodebug
+
+make -j${JOBS} binrpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1
 
 echo "Disk space after build:"
 df -h /
