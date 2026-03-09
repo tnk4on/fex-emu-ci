@@ -15,7 +15,7 @@ echo "Fedora: ${FEDORA_VERSION}"
 # 1. Install build dependencies
 echo "=== Installing build dependencies ==="
 dnf install -y --setopt=install_weak_deps=false \
-    gcc make flex bison bc elfutils-libelf-devel \
+    gcc make flex bison bc elfutils-libelf-devel elfutils-devel \
     openssl openssl-devel perl dwarves \
     rpm-build rsync kmod hostname \
     && dnf clean all
