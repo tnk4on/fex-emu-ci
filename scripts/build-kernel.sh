@@ -64,8 +64,10 @@ JOBS=$(nproc)
 echo "Building with ${JOBS} parallel jobs"
 echo "Disk space before build:"
 df -h /
-# Use binrpm-pkg: builds binary RPMs only (no source RPM, no debuginfo)
-make -j${JOBS} binrpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1
+# Use binrpm-pkg: builds binary RPMs only (no source RPM)
+# RPMOPTS disables debuginfo RPM that stalls on large kernels
+make -j${JOBS} binrpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1 \
+    RPMOPTS="--define '%debug_package %{nil}'"
 
 echo "Disk space after build:"
 df -h /
