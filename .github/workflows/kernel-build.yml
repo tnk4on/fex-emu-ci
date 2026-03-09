@@ -1,0 +1,81 @@
+name: Kernel Build (TSO-patched)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: 'Kernel branch (AsahiLinux/linux)'
+        required: false
+        default: 'bits/220-tso'
+      fedora_version:
+        description: 'Fedora version for config'
+        required: false
+        default: '43'
+      release_tag:
+        description: 'GitHub Release tag name'
+        required: false
+        default: 'kernel-latest'
+
+permissions:
+  contents: write
+
+jobs:
+  build-kernel:
+    name: Build TSO Kernel RPMs (aarch64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    container:
+      image: fedora:${{ inputs.fedora_version || '43' }}
+
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Install git (for kernel clone)
+        run: dnf install -y git
+
+      - name: Build kernel RPMs
+        run: |
+          chmod +x scripts/build-kernel.sh
+          KERNEL_BRANCH="${{ inputs.kernel_branch || 'bits/220-tso' }}" \
+          FEDORA_VERSION="${{ inputs.fedora_version || '43' }}" \
+          OUTPUT_DIR="/tmp/kernel-rpms" \
+          bash scripts/build-kernel.sh
+
+      - name: Package kernel RPMs
+        run: |
+          cd /tmp
+          KERNEL_VERSION=$(ls kernel-rpms/kernel-core-*.rpm 2>/dev/null | head -1 | sed 's/.*kernel-core-\(.*\)\.aarch64\.rpm/\1/')
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+          tar czf kernel-rpms-${KERNEL_VERSION}.tar.gz -C kernel-rpms .
+          ls -lh kernel-rpms-*.tar.gz
+
+      - name: Upload RPMs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-rpms
+          path: /tmp/kernel-rpms-*.tar.gz
+          retention-days: 90
+
+      - name: Upload to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="${{ inputs.release_tag || 'kernel-latest' }}"
+          RPM_FILE=$(ls /tmp/kernel-rpms-*.tar.gz)
+
+          # Create or update release
+          gh release view "${RELEASE_TAG}" --repo ${{ github.repository }} >/dev/null 2>&1 \
+            && gh release upload "${RELEASE_TAG}" "${RPM_FILE}" --clobber --repo ${{ github.repository }} \
+            || gh release create "${RELEASE_TAG}" "${RPM_FILE}" \
+                --repo ${{ github.repository }} \
+                --title "TSO Kernel RPMs (${KERNEL_VERSION})" \
+                --notes "Fedora kernel with Asahi Linux TSO patches (bits/220-tso)
+          
+          - CONFIG_ARM64_MEMORY_MODEL_CONTROL=y
+          - CONFIG_ARM64_ACTLR_STATE=y
+          
+          Built on: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Runner: ubuntu-24.04-arm"
+
+          echo "✅ Uploaded to release: ${RELEASE_TAG}"
