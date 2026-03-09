@@ -3,12 +3,8 @@ name: Kernel Build (TSO-patched)
 on:
   workflow_dispatch:
     inputs:
-      kernel_branch:
-        description: 'Kernel branch (AsahiLinux/linux)'
-        required: false
-        default: 'bits/220-tso'
       fedora_version:
-        description: 'Fedora version for config'
+        description: 'Fedora version'
         required: false
         default: '43'
       release_tag:
@@ -31,21 +27,20 @@ jobs:
       - name: Checkout CI repo
         uses: actions/checkout@v4
 
-      - name: Install git (for kernel clone)
-        run: dnf install -y git
-
       - name: Build kernel RPMs
         run: |
-          chmod +x scripts/build-kernel.sh
-          KERNEL_BRANCH="${{ inputs.kernel_branch || 'bits/220-tso' }}" \
+          chmod +x kernel/build-kernel.sh
           FEDORA_VERSION="${{ inputs.fedora_version || '43' }}" \
           OUTPUT_DIR="/tmp/kernel-rpms" \
-          bash scripts/build-kernel.sh
+          bash kernel/build-kernel.sh
 
       - name: Package kernel RPMs
         run: |
           cd /tmp
           KERNEL_VERSION=$(ls kernel-rpms/kernel-core-*.rpm 2>/dev/null | head -1 | sed 's/.*kernel-core-\(.*\)\.aarch64\.rpm/\1/')
+          if [ -z "${KERNEL_VERSION}" ]; then
+            KERNEL_VERSION=$(ls kernel-rpms/kernel-*.rpm 2>/dev/null | head -1 | sed 's/.*kernel-\(.*\)\.aarch64\.rpm/\1/')
+          fi
           echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
           tar czf kernel-rpms-${KERNEL_VERSION}.tar.gz -C kernel-rpms .
           ls -lh kernel-rpms-*.tar.gz
@@ -70,7 +65,7 @@ jobs:
             || gh release create "${RELEASE_TAG}" "${RPM_FILE}" \
                 --repo ${{ github.repository }} \
                 --title "TSO Kernel RPMs (${KERNEL_VERSION})" \
-                --notes "Fedora kernel with Asahi Linux TSO patches (bits/220-tso)
+                --notes "Fedora kernel with TSO patches (rpmbuild method)
           
           - CONFIG_ARM64_MEMORY_MODEL_CONTROL=y
           - CONFIG_ARM64_ACTLR_STATE=y
