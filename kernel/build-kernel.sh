@@ -43,6 +43,7 @@ dnf builddep -y --spec ~/rpmbuild/SPECS/kernel.spec \
     --without doc \
     --without headers \
     --without perf \
+    --without libperf \
     --without tools \
     --without selftests
 
@@ -97,6 +98,7 @@ rpmbuild -bb \
     --without doc \
     --without headers \
     --without perf \
+    --without libperf \
     --without tools \
     --without selftests \
     --target aarch64 \
