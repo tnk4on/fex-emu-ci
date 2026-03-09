@@ -14,7 +14,7 @@ echo "Fedora: ${FEDORA_VERSION}"
 # 1. Install build dependencies
 echo "=== Installing build tools ==="
 dnf install -y --setopt=install_weak_deps=false \
-    rpm-build dnf-plugins-core git asciidoc xmlto \
+    rpm-build dnf-plugins-core git \
     && dnf clean all
 
 # 2. Download Fedora kernel SRPM
@@ -32,17 +32,12 @@ KERNEL_RELEASE=$(rpm -qp --queryformat '%{RELEASE}' "${SRPM}")
 echo "Kernel version: ${KERNEL_VERSION}-${KERNEL_RELEASE}"
 
 # 4. Install build dependencies from spec
+# Only disable debuginfo/debug to match build server; let dnf install all other deps
 echo "=== Installing kernel build dependencies ==="
 dnf builddep -y --spec ~/rpmbuild/SPECS/kernel.spec \
     --define "buildid .tso" \
     --without debuginfo \
-    --without debug \
-    --without doc \
-    --without headers \
-    --without perf \
-    --without tools \
-    --without bpftool \
-    --without selftests
+    --without debug
 
 # 5. Copy TSO patches to SOURCES
 echo "=== Adding TSO patches ==="
@@ -92,12 +87,6 @@ rpmbuild -bb \
     --define "buildid .tso" \
     --without debuginfo \
     --without debug \
-    --without doc \
-    --without headers \
-    --without perf \
-    --without tools \
-    --without bpftool \
-    --without selftests \
     --target aarch64 \
     "${SPEC}" 2>&1
 
