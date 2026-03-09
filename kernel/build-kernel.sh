@@ -14,7 +14,7 @@ echo "Fedora: ${FEDORA_VERSION}"
 # 1. Install build dependencies
 echo "=== Installing build tools ==="
 dnf install -y --setopt=install_weak_deps=false \
-    rpm-build dnf-plugins-core git \
+    rpm-build dnf-plugins-core git asciidoc xmlto \
     && dnf clean all
 
 # 2. Download Fedora kernel SRPM
