@@ -50,29 +50,38 @@ scripts/config --enable CONFIG_ARM64_ACTLR_STATE
 # Ensure KVM support is enabled
 scripts/config --enable CONFIG_KVM
 scripts/config --enable CONFIG_KVM_ARM_HOST
+# Disable debuginfo to save disk space (14GB SSD limit on GitHub runners)
+scripts/config --enable CONFIG_DEBUG_INFO_NONE
+scripts/config --disable CONFIG_DEBUG_INFO_DWARF5
+scripts/config --disable CONFIG_DEBUG_INFO_DWARF4
 
 # 5. Update config with new options
 make olddefconfig
 
 # Verify TSO options
 echo "=== Verifying TSO config ==="
-grep -E 'ARM64_MEMORY_MODEL_CONTROL|ARM64_ACTLR_STATE' .config
+grep -E 'ARM64_MEMORY_MODEL_CONTROL|ARM64_ACTLR_STATE|DEBUG_INFO' .config
 
 # 6. Build kernel RPM packages
 echo "=== Building kernel RPM packages ==="
-# Use make rpm-pkg for direct RPM generation from kernel source
 # Limit jobs to avoid OOM on constrained environments
 JOBS=$(nproc)
 echo "Building with ${JOBS} parallel jobs"
+echo "Disk space before build:"
+df -h /
 make -j${JOBS} rpm-pkg \
     LOCALVERSION="" \
     KDEB_PKGVERSION="${KERNEL_VERSION}-1" \
     2>&1 | tail -20
 
+echo "Disk space after build:"
+df -h /
+
 # 7. Collect output RPMs
 echo "=== Collecting RPM packages ==="
 mkdir -p "${OUTPUT_DIR}"
-find /root/rpmbuild/RPMS/aarch64/ -name "kernel*.rpm" -exec cp {} "${OUTPUT_DIR}/" \;
+# Skip debuginfo RPMs to save space
+find /root/rpmbuild/RPMS/aarch64/ -name "kernel*.rpm" ! -name "*debug*" -exec cp {} "${OUTPUT_DIR}/" \;
 ls -lh "${OUTPUT_DIR}/"
 
 echo "=== Kernel RPM build complete ==="
