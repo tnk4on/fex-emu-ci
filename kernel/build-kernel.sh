@@ -32,20 +32,19 @@ KERNEL_RELEASE=$(rpm -qp --queryformat '%{RELEASE}' "${SRPM}")
 echo "Kernel version: ${KERNEL_VERSION}-${KERNEL_RELEASE}"
 
 # 4. Install build dependencies from spec
-# Disable sub-packages not needed for TSO kernel (core/modules/devel only)
-# - debuginfo/debug: massive debug RPMs exceed CI runner resources
-# - bpftools/selftests: compilation errors in CI (iou-zcrx.c header mismatch)
-# - perf/tools/doc: not needed for kernel deployment
+# Disable sub-packages not needed for TSO kernel (only core/modules/devel needed)
+# These flags match the build server configuration exactly.
+# Note: bpftool is not a separate bcond; it is disabled via selftests + tools.
 echo "=== Installing kernel build dependencies ==="
 dnf builddep -y --spec ~/rpmbuild/SPECS/kernel.spec \
     --define "buildid .tso" \
     --without debuginfo \
     --without debug \
-    --without bpftools \
-    --without selftests \
+    --without doc \
+    --without headers \
     --without perf \
     --without tools \
-    --without doc
+    --without selftests
 
 # 5. Copy TSO patches to SOURCES
 echo "=== Adding TSO patches ==="
@@ -95,11 +94,11 @@ rpmbuild -bb \
     --define "buildid .tso" \
     --without debuginfo \
     --without debug \
-    --without bpftools \
-    --without selftests \
+    --without doc \
+    --without headers \
     --without perf \
     --without tools \
-    --without doc \
+    --without selftests \
     --target aarch64 \
     "${SPEC}" 2>&1
 
