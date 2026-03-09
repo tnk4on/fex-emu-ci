@@ -50,29 +50,31 @@ scripts/config --enable CONFIG_ARM64_ACTLR_STATE
 # Ensure KVM support is enabled
 scripts/config --enable CONFIG_KVM
 scripts/config --enable CONFIG_KVM_ARM_HOST
-# Disable debuginfo to save disk space (14GB SSD limit on GitHub runners)
-scripts/config --enable CONFIG_DEBUG_INFO_NONE
-scripts/config --disable CONFIG_DEBUG_INFO_DWARF5
-scripts/config --disable CONFIG_DEBUG_INFO_DWARF4
 
 # 5. Update config with new options
 make olddefconfig
 
+# Force disable debuginfo AFTER olddefconfig (Kconfig deps prevent scripts/config from working)
+scripts/config --disable CONFIG_DEBUG_INFO
+scripts/config --enable CONFIG_DEBUG_INFO_NONE
+make olddefconfig
+
 # Verify TSO options
 echo "=== Verifying TSO config ==="
-grep -E 'ARM64_MEMORY_MODEL_CONTROL|ARM64_ACTLR_STATE|DEBUG_INFO' .config
+grep -E 'ARM64_MEMORY_MODEL_CONTROL|ARM64_ACTLR_STATE' .config
+echo "--- Debug info config ---"
+grep -E 'CONFIG_DEBUG_INFO' .config
+
+# Skip debuginfo RPM generation
+echo '%debug_package %{nil}' > ~/.rpmmacros
 
 # 6. Build kernel RPM packages
 echo "=== Building kernel RPM packages ==="
-# Limit jobs to avoid OOM on constrained environments
 JOBS=$(nproc)
 echo "Building with ${JOBS} parallel jobs"
 echo "Disk space before build:"
 df -h /
-make -j${JOBS} rpm-pkg \
-    LOCALVERSION="" \
-    KDEB_PKGVERSION="${KERNEL_VERSION}-1" \
-    2>&1 | tail -20
+make -j${JOBS} rpm-pkg LOCALVERSION="" INSTALL_MOD_STRIP=1
 
 echo "Disk space after build:"
 df -h /
